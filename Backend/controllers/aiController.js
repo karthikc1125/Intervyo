@@ -46,77 +46,6 @@ export const generateQuestions = async (req, res) => {
 // @desc    Evaluate candidate answer
 // @route   POST /api/ai/evaluate-answer
 // @access  Private
-// export const evaluateCandidateAnswer = async (req, res) => {
-//   try {
-//     const { sessionId, question, answer, codeSubmitted } = req.body;
-
-//     if (!sessionId || !question || !answer) {
-//       return res.status(400).json({
-//         success: false,
-//         message: 'Please provide sessionId, question, and answer'
-//       });
-//     }
-
-//     const session = await InterviewSession.findById(sessionId)
-//       .populate('interviewId');
-
-//     if (!session) {
-//       return res.status(404).json({
-//         success: false,
-//         message: 'Session not found'
-//       });
-//     }
-
-//     // Create context from previous conversation
-//     const context = `Role: ${session.interviewId.role}, Difficulty: ${session.interviewId.difficulty}`;
-
-//     // Evaluate the answer
-//     const evaluation = await evaluateAnswer(
-//       question,
-//       answer,
-//       context,
-//       codeSubmitted
-//     );
-
-//     // Add to conversation history
-//     session.conversation.push({
-//   speaker: 'candidate',
-//   message: answer,
-//   type: 'answer',
-//   timestamp: new Date()
-// });
-
-// session.conversation.push({
-//   speaker: 'ai',
-//   message: evaluation.review,
-//   type: 'feedback',
-//   timestamp: new Date()
-// });
-
-//     session.currentQuestionIndex += 1;
-//     await session.save();
-
-//     res.json({
-//       success: true,
-//       data: {
-//         review: evaluation.review,
-//         score: evaluation.score,
-//         strength: evaluation.strength,
-//         improvement: evaluation.improvement
-//       }
-//     });
-//   } catch (error) {
-//     console.error('Evaluate answer error:', error);
-//     res.status(500).json({
-//       success: false,
-//       message: 'Error evaluating answer',
-//       error: error.message
-//     });
-//   }
-// };
-
-// controllers/aiInterview.controller.js
-
 export const evaluateCandidateAnswer = async (req, res) => {
   try {
     const {
@@ -148,13 +77,18 @@ export const evaluateCandidateAnswer = async (req, res) => {
     // Create context from previous conversation
     const context = `Role: ${session.interviewId.role}, Difficulty: ${session.interviewId.difficulty}`;
 
-    // Evaluate the answer using AI
-    const evaluation = await evaluateAnswer(
-      question,
-      answer,
-      context,
-      codeSubmitted,
+    // --- TIMEOUT LOGIC START ---
+    // Create a timeout promise that rejects after 20 seconds
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('AI_TIMEOUT')), 20000)
     );
+
+    // Race the AI evaluation against the timeout
+    const evaluation = await Promise.race([
+      evaluateAnswer(question, answer, context, codeSubmitted),
+      timeoutPromise
+    ]);
+    // --- TIMEOUT LOGIC END ---
 
     // CRITICAL: Store the question evaluation
     const questionEval = {
@@ -209,7 +143,18 @@ export const evaluateCandidateAnswer = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Evaluate answer error:", error);
+    console.error('Evaluate answer error:', error);
+
+    // --- TIMEOUT ERROR HANDLING ---
+    if (error.message === 'AI_TIMEOUT') {
+      return res.status(504).json({
+        success: false,
+        message: 'The AI took too long to respond. Please check your connection and try again.',
+        error: 'AI_TIMEOUT'
+      });
+    }
+    // -----------------------------
+
     res.status(500).json({
       success: false,
       message: "Error evaluating answer",
@@ -264,8 +209,8 @@ export const updateUserStreakAndStats = async (userId) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const lastActivity = user.stats.lastActivityDate
-      ? new Date(user.stats.lastActivityDate)
+    const lastActivity = user.stats.lastActivityDate 
+      ? new Date(user.stats.lastActivityDate) 
       : null;
 
     if (lastActivity) {
@@ -308,267 +253,128 @@ export const updateUserStreakAndStats = async (userId) => {
   }
 };
 
-// export const completeInterview = async (req, res) => {
-//   try {
-//     const {  interviewId } = req.body;
-//     const userId = req.user.id;
-//     console.log("inter",interviewId,userId)
+/**
+ * Complete interview with enhanced feedback
+ */
+export const completeInterview = async (req, res) => {
+  try {
+    const { interviewId } = req.body;
+    const userId = req.user.id;
 
-//     const session = await InterviewSession.findOne({ interviewId:interviewId, userId:userId });
+    console.log("Completing interview:", interviewId, "for user:", userId);
 
-//     if (!session) {
-//       return res.status(404).json({
-//         success: false,
-//         message: 'Session not found'
-//       });
-//     }
+    // Find session
+    const session = await InterviewSession.findOne({ 
+      interviewId: interviewId, 
+      userId: userId 
+    }).populate('interviewId');
 
-//     // Generate overall feedback
-//     const feedback = await generateOverallFeedback(session);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        message: 'Session not found'
+      });
+    }
 
-//     // Update session
-//     session.status = 'completed';
-//     session.overallScore = feedback.overallScore;
-//     session.communicationScore = feedback.communicationScore;
-//     session.problemSolvingScore = feedback.problemSolvingScore;
-//     session.feedback = {
-//       summary: feedback.summary,
-//       strengths: feedback.strengths,
-//       improvements: feedback.improvements
-//     };
-//     await session.save();
+    // Generate enhanced feedback
+    const feedback = await generateEnhancedFeedback(session);
 
-//     // Update interview
-//     const interview = await Interview.findById(interviewId);
-//     if (interview) {
-//       interview.status = 'completed';
-//       interview.completedAt = new Date();
-//       await interview.save();
-//     }
-//     console.log("Session : ",session)
-//     console.log("feedback : ",feedback)
-//     res.json({
-//       success: true,
-//       data: {
-//         session,
-//         feedback
-//       }
-//     });
-//   } catch (error) {
-//     console.error('Complete interview error:', error);
-//     res.status(500).json({
-//       success: false,
-//       message: 'Error completing interview',
-//       error: error.message
-//     });
-//   }
-// };
+    // Update session with complete feedback structure
+    const updatedSession = await InterviewSession.findByIdAndUpdate(
+      session._id,
+      {
+        $set: {
+          sessionStatus: 'completed',
+          overallScore: feedback.overallScore,
+          technicalScore: feedback.technicalScore,
+          communicationScore: feedback.communicationScore,
+          problemSolvingScore: feedback.problemSolvingScore,
+          feedback: {
+            summary: feedback.summary,
+            strengths: feedback.strengths,
+            improvements: feedback.improvements,
+            keyHighlights: feedback.keyHighlights,
+            areasOfConcern: feedback.areasOfConcern,
+            technicalAnalysis: feedback.technicalAnalysis,
+            behavioralAnalysis: feedback.behavioralAnalysis
+          },
+          'stats.totalQuestions': session.questionEvaluations.length,
+          'stats.questionsAnswered': session.questionEvaluations.filter(q => q.userAnswer).length,
+          'stats.questionsSkipped': session.questionEvaluations.filter(q => !q.userAnswer).length
+        }
+      },
+      { 
+        new: true,
+        runValidators: true 
+      }
+    ).populate('interviewId');
 
-// const generateOverallFeedback = async (session) => {
-//   try {
-//     // Calculate scores from question evaluations
-//     const evaluations = session.questionEvaluations || [];
+    // Generate certificate data
+    const certificateData = generateCertificate(updatedSession, feedback);
 
-//     if (evaluations.length === 0) {
-//       return {
-//         summary: "Interview completed. Keep practicing to improve your skills!",
-//         strengths: ["Completed the interview", "Showed determination"],
-//         improvements: ["Practice more technical questions", "Work on communication clarity"],
-//         overallScore: 50,
-//         technicalScore: 5,
-//         communicationScore: 5,
-//         problemSolvingScore: 5
-//       };
-//     }
+    // Update interview with certificate
+    const updatedInterview = await Interview.findByIdAndUpdate(
+      interviewId,
+      {
+        $set: {
+          status: 'completed',
+          completedAt: new Date(),
+          overallScore: feedback.overallScore,
+          technicalScore: feedback.technicalScore,
+          communicationScore: feedback.communicationScore,
+          problemSolvingScore: feedback.problemSolvingScore,
+          feedback: feedback.summary,
+          strengths: feedback.strengths,
+          improvements: feedback.improvements,
+          sessionId: updatedSession._id,
+          certificate: certificateData
+        }
+      },
+      { 
+        new: true,
+        runValidators: true 
+      }
+    ).populate('userId');
 
-//     // Calculate average scores by category
-//     const technicalQuestions = evaluations.filter(e => e.category === 'technical');
-//     const behavioralQuestions = evaluations.filter(e => e.category === 'behavioral');
-//     const codingQuestions = evaluations.filter(e => e.category === 'coding');
+    console.log("Interview completed successfully");
 
-//     const technicalScore = technicalQuestions.length > 0
-//       ? Math.round(technicalQuestions.reduce((sum, e) => sum + (e.score || 0), 0) / technicalQuestions.length)
-//       : 5;
+    // Return comprehensive data
+    const responseData = {
+      session: {
+        _id: updatedSession._id,
+        interviewId: updatedSession.interviewId,
+        userId: updatedSession.userId,
+        conversation: updatedSession.conversation,
+        questionEvaluations: updatedSession.questionEvaluations || [],
+        sessionStatus: updatedSession.sessionStatus,
+        overallScore: updatedSession.overallScore,
+        technicalScore: updatedSession.technicalScore,
+        communicationScore: updatedSession.communicationScore,
+        problemSolvingScore: updatedSession.problemSolvingScore,
+        feedback: updatedSession.feedback,
+        stats: updatedSession.stats,
+        createdAt: updatedSession.createdAt,
+        updatedAt: updatedSession.updatedAt
+      },
+      feedback: feedback,
+      certificate: certificateData
+    };
 
-//     const communicationScore = behavioralQuestions.length > 0
-//       ? Math.round(behavioralQuestions.reduce((sum, e) => sum + (e.score || 0), 0) / behavioralQuestions.length)
-//       : 5;
+    res.json({
+      success: true,
+      data: responseData
+    });
+  } catch (error) {
+    console.error('Complete interview error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error completing interview',
+      error: error.message
+    });
+  }
+};
 
-//     const problemSolvingScore = codingQuestions.length > 0
-//       ? Math.round(codingQuestions.reduce((sum, e) => sum + (e.score || 0), 0) / codingQuestions.length)
-//       : technicalScore;
-
-//     // Calculate overall score (0-100)
-//     const overallScore = Math.round(
-//       (technicalScore * 10 * 0.4) +
-//       (communicationScore * 10 * 0.3) +
-//       (problemSolvingScore * 10 * 0.3)
-//     );
-
-//     // Generate strengths based on high-scoring questions
-//     const strengths = evaluations
-//       .filter(e => e.score >= 7)
-//       .slice(0, 3)
-//       .map(e => `Strong understanding of ${e.category} concepts`)
-//       .concat(overallScore >= 70 ? ["Good overall performance"] : []);
-
-//     // Generate improvements based on low-scoring questions
-//     const improvements = evaluations
-//       .filter(e => e.score < 6)
-//       .slice(0, 3)
-//       .map(e => `Improve ${e.category} knowledge and practice`)
-//       .concat(overallScore < 70 ? ["Focus on core fundamentals"] : []);
-
-//     // Generate summary
-//     const summary = overallScore >= 80
-//       ? `Excellent performance! You demonstrated strong ${technicalScore >= 7 ? 'technical skills' : 'problem-solving abilities'} throughout the interview.`
-//       : overallScore >= 60
-//       ? `Good job! You showed solid understanding in most areas. Focus on ${technicalScore < 6 ? 'technical concepts' : 'communication clarity'} to improve further.`
-//       : `Keep practicing! Review the feedback carefully and work on ${technicalScore < 6 ? 'technical fundamentals' : 'problem-solving approaches'}.`;
-
-//     return {
-//       summary,
-//       strengths: strengths.length > 0 ? strengths : ["Completed the interview"],
-//       improvements: improvements.length > 0 ? improvements : ["Practice more interview questions"],
-//       overallScore,
-//       technicalScore,
-//       communicationScore,
-//       problemSolvingScore
-//     };
-//   } catch (error) {
-//     console.error('Error generating feedback:', error);
-//     return {
-//       summary: "Interview completed successfully!",
-//       strengths: ["Participated in the interview"],
-//       improvements: ["Continue practicing"],
-//       overallScore: 50,
-//       technicalScore: 5,
-//       communicationScore: 5,
-//       problemSolvingScore: 5
-//     };
-//   }
-// };
-
-// export const completeInterview = async (req, res) => {
-//   try {
-//     const { interviewId } = req.body;
-//     const userId = req.user.id;
-
-//     console.log("Completing interview:", interviewId, "for user:", userId);
-
-//     // Find session
-//     const session = await InterviewSession.findOne({
-//       interviewId: interviewId,
-//       userId: userId
-//     }).populate('interviewId');
-
-//     if (!session) {
-//       console.log("Session not found for:", { interviewId, userId });
-//       return res.status(404).json({
-//         success: false,
-//         message: 'Session not found'
-//       });
-//     }
-
-//     // Generate feedback
-//     const feedback = await generateOverallFeedback(session);
-
-//     // Update session
-//     const updatedSession = await InterviewSession.findByIdAndUpdate(
-//       session._id,
-//       {
-//         $set: {
-//           sessionStatus: 'completed',
-//           overallScore: feedback.overallScore,
-//           technicalScore: feedback.technicalScore,
-//           communicationScore: feedback.communicationScore,
-//           problemSolvingScore: feedback.problemSolvingScore,
-//           'feedback.summary': feedback.summary,
-//           'feedback.strengths': feedback.strengths,
-//           'feedback.improvements': feedback.improvements,
-//         }
-//       },
-//       {
-//         new: true,
-//         runValidators: true
-//       }
-//     ).populate('interviewId');
-
-//     // Update interview
-//     const updatedInterview = await Interview.findByIdAndUpdate(
-//       interviewId,
-//       {
-//         $set: {
-//           status: 'completed',
-//           completedAt: new Date(),
-//           overallScore: feedback.overallScore,
-//           technicalScore: feedback.technicalScore,
-//           communicationScore: feedback.communicationScore,
-//           problemSolvingScore: feedback.problemSolvingScore,
-//           feedback: feedback.summary,
-//           strengths: feedback.strengths,
-//           improvements: feedback.improvements,
-//           questionEvaluations: updatedSession.questionEvaluations
-//         }
-//       },
-//       {
-//         new: true,
-//         runValidators: true
-//       }
-//     );
-
-//     if (!updatedInterview) {
-//       return res.status(404).json({
-//         success: false,
-//         message: 'Interview not found'
-//       });
-//     }
-
-//     console.log("Interview completed successfully");
-
-//     // CRITICAL: Return data in the EXACT format ResultsPage expects
-//     const responseData = {
-//       session: {
-//         _id: updatedSession._id,
-//         interviewId: updatedSession.interviewId,
-//         userId: updatedSession.userId,
-//         conversation: updatedSession.conversation,
-//         questionEvaluations: updatedSession.questionEvaluations || [],
-//         sessionStatus: updatedSession.sessionStatus,
-//         overallScore: updatedSession.overallScore,
-//         technicalScore: updatedSession.technicalScore,
-//         communicationScore: updatedSession.communicationScore,
-//         problemSolvingScore: updatedSession.problemSolvingScore,
-//         feedback: updatedSession.feedback,
-//         createdAt: updatedSession.createdAt,
-//         updatedAt: updatedSession.updatedAt
-//       },
-//       feedback: {
-//         summary: feedback.summary,
-//         strengths: feedback.strengths,
-//         improvements: feedback.improvements,
-//         overallScore: feedback.overallScore,
-//         technicalScore: feedback.technicalScore,
-//         communicationScore: feedback.communicationScore,
-//         problemSolvingScore: feedback.problemSolvingScore
-//       }
-//     };
-
-//     res.json({
-//       success: true,
-//       data: responseData
-//     });
-//   } catch (error) {
-//     console.error('Complete interview error:', error);
-//     res.status(500).json({
-//       success: false,
-//       message: 'Error completing interview',
-//       error: error.message
-//     });
-//   }
-// };
-
-// controllers/aiInterview.controller.js
+// --- HELPER FUNCTIONS ---
 
 const generateEnhancedFeedback = async (session) => {
   try {
@@ -579,19 +385,14 @@ const generateEnhancedFeedback = async (session) => {
     }
 
     // Calculate category scores
-    const technical = evaluations.filter((e) => e.category === "technical");
-    const behavioral = evaluations.filter((e) => e.category === "behavioral");
-    const coding = evaluations.filter((e) => e.category === "coding");
-    const problemSolving = evaluations.filter(
-      (e) => e.category === "problem-solving",
-    );
+    const technical = evaluations.filter(e => e.category === 'technical');
+    const behavioral = evaluations.filter(e => e.category === 'behavioral');
+    const coding = evaluations.filter(e => e.category === 'coding');
+    const problemSolving = evaluations.filter(e => e.category === 'problem-solving');
 
     const technicalScore = calculateAverageScore(technical);
     const communicationScore = calculateAverageScore(behavioral);
-    const problemSolvingScore = calculateAverageScore([
-      ...coding,
-      ...problemSolving,
-    ]);
+    const problemSolvingScore = calculateAverageScore([...coding, ...problemSolving]);
 
     // Calculate overall score (0-100)
     const overallScore = Math.round(
@@ -610,25 +411,20 @@ const generateEnhancedFeedback = async (session) => {
     const keyHighlights = evaluations
       .filter((e) => e.score >= 8)
       .slice(0, 3)
-      .map((e) => `Excellent response to: "${e.question.substring(0, 50)}..."`);
+      .map(e => `Excellent response to: "${e.question.substring(0, 50)}..."`);
 
     // Generate areas of concern
     const areasOfConcern = evaluations
       .filter((e) => e.score < 5)
       .slice(0, 3)
-      .map((e) => `Needs improvement: "${e.question.substring(0, 50)}..."`);
+      .map(e => `Needs improvement: "${e.question.substring(0, 50)}..."`);
 
     // Generate detailed analysis
     const technicalAnalysis = generateTechnicalAnalysis(technical);
     const behavioralAnalysis = generateBehavioralAnalysis(behavioral);
 
     // Generate summary
-    const summary = generateSummary(
-      overallScore,
-      technicalScore,
-      communicationScore,
-      problemSolvingScore,
-    );
+    const summary = generateSummary(overallScore, technicalScore, communicationScore, problemSolvingScore);
 
     return {
       summary,
@@ -650,7 +446,6 @@ const generateEnhancedFeedback = async (session) => {
   }
 };
 
-// Helper functions
 const calculateAverageScore = (questions) => {
   if (questions.length === 0) return 5;
   return Math.round(
@@ -786,131 +581,6 @@ const getDefaultFeedback = () => ({
   communicationScore: 5,
   problemSolvingScore: 5,
 });
-
-/**
- * Complete interview with enhanced feedback
- */
-export const completeInterview = async (req, res) => {
-  try {
-    const { interviewId } = req.body;
-    const userId = req.user.id;
-
-    console.log("Completing interview:", interviewId, "for user:", userId);
-
-    // Find session
-    const session = await InterviewSession.findOne({
-      interviewId: interviewId,
-      userId: userId,
-    }).populate("interviewId");
-
-    if (!session) {
-      return res.status(404).json({
-        success: false,
-        message: "Session not found",
-      });
-    }
-
-    // Generate enhanced feedback
-    const feedback = await generateEnhancedFeedback(session);
-
-    // Update session with complete feedback structure
-    const updatedSession = await InterviewSession.findByIdAndUpdate(
-      session._id,
-      {
-        $set: {
-          sessionStatus: "completed",
-          overallScore: feedback.overallScore,
-          technicalScore: feedback.technicalScore,
-          communicationScore: feedback.communicationScore,
-          problemSolvingScore: feedback.problemSolvingScore,
-          feedback: {
-            summary: feedback.summary,
-            strengths: feedback.strengths,
-            improvements: feedback.improvements,
-            keyHighlights: feedback.keyHighlights,
-            areasOfConcern: feedback.areasOfConcern,
-            technicalAnalysis: feedback.technicalAnalysis,
-            behavioralAnalysis: feedback.behavioralAnalysis,
-          },
-          "stats.totalQuestions": session.questionEvaluations.length,
-          "stats.questionsAnswered": session.questionEvaluations.filter(
-            (q) => q.userAnswer,
-          ).length,
-          "stats.questionsSkipped": session.questionEvaluations.filter(
-            (q) => !q.userAnswer,
-          ).length,
-        },
-      },
-      {
-        new: true,
-        runValidators: true,
-      },
-    ).populate("interviewId");
-
-    // Generate certificate data
-    const certificateData = generateCertificate(updatedSession, feedback);
-
-    // Update interview with certificate
-    const updatedInterview = await Interview.findByIdAndUpdate(
-      interviewId,
-      {
-        $set: {
-          status: "completed",
-          completedAt: new Date(),
-          overallScore: feedback.overallScore,
-          technicalScore: feedback.technicalScore,
-          communicationScore: feedback.communicationScore,
-          problemSolvingScore: feedback.problemSolvingScore,
-          feedback: feedback.summary,
-          strengths: feedback.strengths,
-          improvements: feedback.improvements,
-          sessionId: updatedSession._id,
-          certificate: certificateData,
-        },
-      },
-      {
-        new: true,
-        runValidators: true,
-      },
-    );
-
-    console.log("Interview completed successfully");
-
-    // Return comprehensive data
-    const responseData = {
-      session: {
-        _id: updatedSession._id,
-        interviewId: updatedSession.interviewId,
-        userId: updatedSession.userId,
-        conversation: updatedSession.conversation,
-        questionEvaluations: updatedSession.questionEvaluations || [],
-        sessionStatus: updatedSession.sessionStatus,
-        overallScore: updatedSession.overallScore,
-        technicalScore: updatedSession.technicalScore,
-        communicationScore: updatedSession.communicationScore,
-        problemSolvingScore: updatedSession.problemSolvingScore,
-        feedback: updatedSession.feedback,
-        stats: updatedSession.stats,
-        createdAt: updatedSession.createdAt,
-        updatedAt: updatedSession.updatedAt,
-      },
-      feedback: feedback,
-      certificate: certificateData,
-    };
-
-    res.json({
-      success: true,
-      data: responseData,
-    });
-  } catch (error) {
-    console.error("Complete interview error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error completing interview",
-      error: error.message,
-    });
-  }
-};
 
 // Certificate generation helper
 const generateCertificate = (session, feedback) => {
