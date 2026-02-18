@@ -37,12 +37,19 @@ import QuizPage from "./pages/QuizPage";
 import CookiePolicy from "./pages/CookiePolicy";
 import ScrollToTopOnRouteChange from "./components/shared/ScrollToTopOnRouteChange";
 import Navbar from "./components/Navbar";
+import { useEffect } from "react";
 
 function App() {
   const location = useLocation();
 
   const hideFooterRoutes = ["/login", "/register"];
   const hideFooter = hideFooterRoutes.includes(location.pathname);
+
+  useEffect(() => {
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/sw.js");
+  }
+}, []);
 
   return (
     <>
